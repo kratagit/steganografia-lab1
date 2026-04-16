@@ -1,17 +1,15 @@
 import os
 import re
 import concurrent.futures
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
-
+import json
+import urllib.request
 # ==========================================
 # CONFIGURATION & CONSTANTS
 # ==========================================
-load_dotenv()
 
-STOP_MARKER = "MMMM" 
-MODEL_NAME = "gemini-3.1-flash-lite-preview"
+STOP_MARKER = "MMM" 
+MODEL_NAME = "gemma4:e4b-it-q8_0"
+OLLAMA_URL = "http://localhost:11434/api/generate"
 CONTEXT_WINDOW = 5  # Number of sentences before and after
 INPUT_FILE = "input2.txt"
 SECRET_FILE = "secret2.txt"
@@ -35,9 +33,9 @@ def split_into_sentences(text: str) -> list[str]:
 # ==========================================
 # AI INTEGRATION (NOW WITH CONTEXT)
 # ==========================================
-def rephrase_sentence_with_context(client: genai.Client, target_sentence: str, target_letter: str, prev_context: list[str], next_context: list[str]) -> str:
+def rephrase_sentence_with_context(target_sentence: str, target_letter: str, prev_context: list[str], next_context: list[str]) -> str:
     """
-    Asks Gemini to rephrase a target sentence while providing surrounding context 
+    Asks Ollama (gemma4) to rephrase a target sentence while providing surrounding context 
     to ensure perfect flow and cohesion.
     """
     
@@ -66,17 +64,73 @@ def rephrase_sentence_with_context(client: genai.Client, target_sentence: str, t
     4. RETURN ONLY THE REPHRASED TARGET SENTENCE. Do not return the context. No extra text, no quotation marks.
     """
     
-    config = types.GenerateContentConfig(
-        thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-    )
+    data = json.dumps({
+        "model": MODEL_NAME,
+        "prompt": prompt,
+        "stream": False
+    }).encode("utf-8")
     
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=prompt,
-        config=config,
-    )
+    req = urllib.request.Request(OLLAMA_URL, data=data, headers={"Content-Type": "application/json"})
     
-    return response.text.strip().strip('"').strip("'")
+    try:
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            return result.get("response", "").strip().strip('"').strip("'")
+    except Exception as e:
+        print(f"[!] Warning: Error communicating with Ollama: {e}")
+        return target_sentence  # Fallback to original
+
+def fix_sentences_semantics(sentences_chunk: list[str], required_letters: list[str]) -> list[str]:
+    """
+    Takes a chunk of sentences and validates/fixes their semantic flow, strictly
+    preserving the exact first letter of each sentence.
+    """
+    text_chunk = " ".join(sentences_chunk)
+    letters_str = ", ".join([f"sentence {i+1} must start with '{letter.upper()}'" for i, letter in enumerate(required_letters)])
+    
+    prompt = f"""
+    You are an expert Polish editor. The following text may sound unnatural, have logical errors, or contain strange phrases. 
+    Your task is to fix it to sound 100% natural, correct and logical. 
+    
+    CRITICAL STEGANOGRAPHY RULE:
+    You MUST preserve the exact first letter of each sentence. We have {len(sentences_chunk)} sentences in this text.
+    The rules for the first letters are:
+    {letters_str}
+    
+    [TEXT TO FIX]
+    {text_chunk}
+    
+    Return ONLY the corrected text. Do not add any extra comments, no quotation marks. Keep the same number of sentences ({len(sentences_chunk)}).
+    """
+
+    data = json.dumps({
+        "model": MODEL_NAME,
+        "prompt": prompt,
+        "stream": False
+    }).encode("utf-8")
+    
+    req = urllib.request.Request(OLLAMA_URL, data=data, headers={"Content-Type": "application/json"})
+    
+    try:
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            corrected_text = result.get("response", "").strip().strip('"').strip("'")
+            corrected_sentences = split_into_sentences(corrected_text)
+            
+            # Additional fallback check: verify if the model successfully preserved letters and sentence count
+            if len(corrected_sentences) == len(sentences_chunk):
+                match_all = True
+                for j in range(len(sentences_chunk)):
+                    first_char_match = re.search(r'[A-Za-z]', corrected_sentences[j])
+                    if not first_char_match or first_char_match.group(0).upper() != required_letters[j].upper():
+                        match_all = False
+                        break
+                if match_all:
+                    return corrected_sentences
+            return sentences_chunk # Fallback if model failed constraints
+    except Exception as e:
+        print(f"[!] Warning: Error communicating with Ollama during fix: {e}")
+        return sentences_chunk
 
 # ==========================================
 # CORE STEGANOGRAPHY SYSTEM
@@ -85,12 +139,7 @@ def rephrase_sentence_with_context(client: genai.Client, target_sentence: str, t
 #[ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
 # -> przyjmować tekst źródłowy oraz wiadomość do ukrycia
 def hide_message(source_text: str, secret_message: str) -> str:
-    try:
-        if not os.environ.get("GEMINI_API_KEY"):
-            raise ValueError("API key is missing! Check .env file.")
-        client = genai.Client()
-    except Exception as e:
-        raise RuntimeError(f"Failed to initialize Gemini client: {e}")
+    # We no longer check for GEMINI_API_KEY since we are using local Ollama.
 
     clean_secret = re.sub(r'[^A-Za-z]', '', secret_message).upper()
     message_with_marker = clean_secret + STOP_MARKER
@@ -115,7 +164,7 @@ def hide_message(source_text: str, secret_message: str) -> str:
         next_context = sentences[i+1:end_next]
         
         print(f"[>] Wysyłam request do AI: litera {i + 1}/{len(message_with_marker)} ('{letter}')...")
-        new_sentence = rephrase_sentence_with_context(client, target_sentence, letter, prev_context, next_context)
+        new_sentence = rephrase_sentence_with_context(target_sentence, letter, prev_context, next_context)
         
         first_char_match = re.search(r'[A-Za-z]', new_sentence)
         if first_char_match and first_char_match.group(0).upper() != letter:
@@ -130,17 +179,27 @@ def hide_message(source_text: str, secret_message: str) -> str:
     # [ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
     # -> wykorzystywać pierwsze litery kolejnych wyrazów lub zdań do utworzenia akrostychu
     # -> wprowadzać jedynie takie zmiany w tekście, które pozwalają zachować jego czytelność i możliwie zbliżony sens.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        # Wysyłamy zapytania "bulkiem" i zachowujemy oryginalną kolejność dzięki numerowi indeksu `i`
-        futures = [executor.submit(process_sentence, i, letter) for i, letter in enumerate(message_with_marker)]
+    
+    # Procesujemy zdania sekwencyjnie (pojedynczo) w przypadku API od Ollamy
+    for i, letter in enumerate(message_with_marker):
+        idx, mod_sentence = process_sentence(i, letter)
+        result_text.append(mod_sentence)
         
-        results_in_order = [None] * len(message_with_marker)
-        for future in concurrent.futures.as_completed(futures):
-            idx, mod_sentence = future.result()
-            results_in_order[idx] = mod_sentence
+    print(f"[*] Post-processing: Checking sentences in chunks of 3 for logical/semantic flow...")
+    # Fix semantics in chunks of 3 sentences
+    fixed_results = []
+    chunk_size = 3
+    for k in range(0, len(result_text), chunk_size):
+        chunk = result_text[k:k+chunk_size]
+        letters_chunk = list(message_with_marker[k:k+chunk_size])
+        
+        print(f"[>] Fixing semantics for sentences {k+1} to min({k+chunk_size}, {len(result_text)})...")
+        corrected_chunk = fix_sentences_semantics(chunk, letters_chunk)
+        fixed_results.extend(corrected_chunk)
+    
+    # Replace result_text with fixed results
+    result_text = fixed_results
 
-    result_text.extend(results_in_order)
-        
     result_text.extend(sentences[len(message_with_marker):])
     
     #[ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:

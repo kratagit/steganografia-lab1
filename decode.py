@@ -3,7 +3,7 @@ import re
 # ==========================================
 # CONFIGURATION & CONSTANTS
 # ==========================================
-STOP_MARKER = "MMMM" 
+STOP_MARKER = "MMM" 
 OUTPUT_FILE = "output.txt"
 
 # ==========================================
