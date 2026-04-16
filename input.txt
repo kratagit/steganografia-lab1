@@ -1,0 +1,1 @@
+Studenci informatyki często spędzają długie godziny przed monitorami. Pisanie kodu wymaga ogromnego skupienia oraz analitycznego myślenia. Czasami najtrudniejszym etapem jest znalezienie małego błędu w składni programu. Zawsze jednak rozwiązanie problemu daje dużą satysfakcję.
