@@ -1,5 +1,6 @@
 import os
 import re
+import concurrent.futures
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -12,8 +13,8 @@ load_dotenv()
 STOP_MARKER = "MMMM" 
 MODEL_NAME = "gemini-3.1-flash-lite-preview"
 CONTEXT_WINDOW = 5  # Number of sentences before and after
-INPUT_FILE = "input.txt"
-SECRET_FILE = "secret.txt"
+INPUT_FILE = "input2.txt"
+SECRET_FILE = "secret2.txt"
 OUTPUT_FILE = "output.txt"
 
 # ==========================================
@@ -29,7 +30,7 @@ def write_to_file(file_path: str, content: str) -> None:
 
 def split_into_sentences(text: str) -> list[str]:
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    return[sentence for sentence in sentences if len(sentence) > 0]
+    return [sentence for sentence in sentences if len(sentence) > 0]
 
 # ==========================================
 # AI INTEGRATION (NOW WITH CONTEXT)
@@ -99,25 +100,21 @@ def hide_message(source_text: str, secret_message: str) -> str:
     if len(message_with_marker) > len(sentences):
         raise ValueError(f"Source text is too short! Need at least {len(message_with_marker)} sentences, but got {len(sentences)}.")
 
-    result_text =[]
+    result_text = []
     
     print(f"[*] Starting AI steganography with CONTEXT AWARENESS ({len(message_with_marker)} characters)...")
     
-    # [ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
-    # -> wykorzystywać pierwsze litery kolejnych wyrazów lub zdań do utworzenia akrostychu
-    for i, letter in enumerate(message_with_marker):
+    def process_sentence(i, letter):
         target_sentence = sentences[i]
         
-        # Get up to 5 ALREADY MODIFIED sentences backward
+        # Używamy ORYGINALNYCH zdań zarówno w tył jak i w przód, co pozwala nam puścić to "bulkiem":
         start_prev = max(0, i - CONTEXT_WINDOW)
-        prev_context = result_text[start_prev:i]
+        prev_context = sentences[start_prev:i]
         
-        # Get up to 5 ORIGINAL sentences forward
         end_next = min(len(sentences), i + 1 + CONTEXT_WINDOW)
         next_context = sentences[i+1:end_next]
         
-        # [ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
-        # -> wprowadzać jedynie takie zmiany w tekście, które pozwalają zachować jego czytelność i możliwie zbliżony sens.
+        print(f"[>] Wysyłam request do AI: litera {i + 1}/{len(message_with_marker)} ('{letter}')...")
         new_sentence = rephrase_sentence_with_context(client, target_sentence, letter, prev_context, next_context)
         
         first_char_match = re.search(r'[A-Za-z]', new_sentence)
@@ -125,7 +122,24 @@ def hide_message(source_text: str, secret_message: str) -> str:
             # Fallback
             new_sentence = f"{letter}ożliwe, że " + new_sentence[0].lower() + new_sentence[1:]
             
-        result_text.append(new_sentence)
+        print(f"[V] Otrzymano wynik: litera {i + 1}/{len(message_with_marker)} ('{letter}').")
+        return i, new_sentence
+
+    result_text = []
+
+    # [ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
+    # -> wykorzystywać pierwsze litery kolejnych wyrazów lub zdań do utworzenia akrostychu
+    # -> wprowadzać jedynie takie zmiany w tekście, które pozwalają zachować jego czytelność i możliwie zbliżony sens.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        # Wysyłamy zapytania "bulkiem" i zachowujemy oryginalną kolejność dzięki numerowi indeksu `i`
+        futures = [executor.submit(process_sentence, i, letter) for i, letter in enumerate(message_with_marker)]
+        
+        results_in_order = [None] * len(message_with_marker)
+        for future in concurrent.futures.as_completed(futures):
+            idx, mod_sentence = future.result()
+            results_in_order[idx] = mod_sentence
+
+    result_text.extend(results_in_order)
         
     result_text.extend(sentences[len(message_with_marker):])
     
@@ -133,52 +147,26 @@ def hide_message(source_text: str, secret_message: str) -> str:
     # -> zwracać tekst z ukrytą wiadomością.
     return " ".join(result_text)
 
-
-#[ASSIGNMENT REQUIREMENT]: Funkcja wyodrębniająca wiadomość powinna:
-# -> przyjmować tekst z ukrytą wiadomością.
-def extract_message(stego_text: str) -> str:
-    sentences = split_into_sentences(stego_text)
-    extracted_message = ""
-    
-    # [ASSIGNMENT REQUIREMENT]: Funkcja wyodrębniająca wiadomość powinna:
-    # -> odczytywać ukrytą wiadomość z pierwszych liter wyrazów lub zdań
-    for sentence in sentences:
-        first_char_match = re.search(r'[A-Za-z]', sentence)
-        if first_char_match:
-            extracted_message += first_char_match.group(0).upper()
-            
-        if STOP_MARKER in extracted_message:
-            #[ASSIGNMENT REQUIREMENT]: Funkcja wyodrębniająca wiadomość powinna:
-            # -> zwracać odczytaną wiadomość tekstową.
-            return extracted_message.replace(STOP_MARKER, "")
-            
-    return extracted_message
-
 # ==========================================
 # MAIN EXECUTION FLOW
 # ==========================================
 if __name__ == "__main__":
     print("=" * 50)
-    print(" AI STEGANOGRAPHY SYSTEM (Context-Aware) ")
+    print(" AI STEGANOGRAPHY SYSTEM - ENCODER ")
     print("=" * 50)
 
     try:
         text = read_from_file(INPUT_FILE)
         secret = read_from_file(SECRET_FILE)
         
-        if not text or not secret:
-            raise FileNotFoundError(f"Missing '{INPUT_FILE}' or '{SECRET_FILE}'")
+        if not text:
+            raise ValueError(f"File '{INPUT_FILE}' is empty!")
+        if not secret:
+            raise ValueError(f"File '{SECRET_FILE}' is empty!")
 
         encrypted_text = hide_message(text, secret)
         write_to_file(OUTPUT_FILE, encrypted_text)
         print("\n[+] SUCCESS: The message has been securely hidden.")
-        
-        text_to_decode = read_from_file(OUTPUT_FILE)
-        decoded_secret = extract_message(text_to_decode)
-        
-        print("\n" + "=" * 50)
-        print(f"-> EXTRACTED SECRET FROM FILE: '{decoded_secret}'")
-        print("=" * 50)
         
     except Exception as err:
         print(f"\n[ERROR]: {err}")
