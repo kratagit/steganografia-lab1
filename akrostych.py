@@ -8,8 +8,10 @@ from google.genai import types
 # CONFIGURATION & CONSTANTS
 # ==========================================
 load_dotenv()
-STOP_MARKER = "QQQ"
+
+STOP_MARKER = "MMMM" 
 MODEL_NAME = "gemini-3.1-flash-lite-preview"
+CONTEXT_WINDOW = 5  # Liczba zdań przed i po
 
 # ==========================================
 # HELPER FUNCTIONS
@@ -27,30 +29,49 @@ def split_into_sentences(text: str) -> list[str]:
     return[sentence for sentence in sentences if len(sentence) > 0]
 
 # ==========================================
-# AI INTEGRATION
+# AI INTEGRATION (NOW WITH CONTEXT)
 # ==========================================
-def rephrase_sentence_with_ai(client: genai.Client, original_sentence: str, target_letter: str) -> str:
-    prompt = f"""
-    You are a linguistic assistant. Your task is to rephrase the following sentence so that 
-    its first word begins with the letter '{target_letter.upper()}'.
-    
-    RULES:
-    1. You MUST preserve the original meaning and context of the sentence.
-    2. You MUST preserve the original language of the sentence.
-    3. The sentence must sound completely natural and be grammatically correct.
-    4. RETURN ONLY THE REPHRASED SENTENCE. Do not add any quotes.
-    
-    Original sentence: {original_sentence}
+def rephrase_sentence_with_context(client: genai.Client, target_sentence: str, target_letter: str, prev_context: list[str], next_context: list[str]) -> str:
     """
+    Asks Gemini to rephrase a target sentence while providing surrounding context 
+    to ensure perfect flow and cohesion.
+    """
+    
+    # Formatowanie kontekstu (jeśli puste, dajemy znak, że to początek/koniec)
+    prev_text = " ".join(prev_context) if prev_context else "(None - this is the beginning of the text)"
+    next_text = " ".join(next_context) if next_context else "(None - this is the end of the text)"
+
+    prompt = f"""
+    You are an expert copywriter. Your task is to rewrite the TARGET SENTENCE so its very FIRST word starts with the letter '{target_letter.upper()}'.
+    
+    To help you maintain a perfect, natural flow, here is the surrounding context of the article:
+    
+    [PREVIOUS SENTENCES]
+    {prev_text}
+    
+    [TARGET SENTENCE TO REWRITE]
+    {target_sentence}
+    
+    [NEXT SENTENCES]
+    {next_text}
+    
+    CRITICAL RULES:
+    1. The target sentence MUST sound 100% natural and fit logically between the PREVIOUS and NEXT sentences.
+    2. DO NOT use artificial loanwords, strange hyphenations, or forced words. Use everyday, fluid vocabulary.
+    3. You must preserve the core meaning and the original language of the target sentence.
+    4. RETURN ONLY THE REPHRASED TARGET SENTENCE. Do not return the context. No extra text, no quotation marks.
+    """
+    
     config = types.GenerateContentConfig(
-        thinking_config=types.ThinkingConfig(thinking_level="MINIMAL"),
-        temperature=0.3
+        thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
     )
+    
     response = client.models.generate_content(
         model=MODEL_NAME,
         contents=prompt,
         config=config,
     )
+    
     return response.text.strip().strip('"').strip("'")
 
 # ==========================================
@@ -60,10 +81,6 @@ def rephrase_sentence_with_ai(client: genai.Client, original_sentence: str, targ
 #[ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
 # -> przyjmować tekst źródłowy oraz wiadomość do ukrycia
 def hide_message(source_text: str, secret_message: str) -> str:
-    """
-    Hides a secret message within the source text.
-    Takes 'source_text' and 'secret_message' as input parameters.
-    """
     try:
         if not os.environ.get("GEMINI_API_KEY"):
             raise ValueError("API key is missing! Check .env file.")
@@ -77,30 +94,39 @@ def hide_message(source_text: str, secret_message: str) -> str:
     sentences = split_into_sentences(source_text)
     
     if len(message_with_marker) > len(sentences):
-        raise ValueError(f"Source text is too short!")
+        raise ValueError(f"Source text is too short! Need at least {len(message_with_marker)} sentences, but got {len(sentences)}.")
 
-    result_text = []
+    result_text =[]
+    
+    print(f"[*] Starting AI steganography with CONTEXT AWARENESS ({len(message_with_marker)} characters)...")
     
     # [ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
     # -> wykorzystywać pierwsze litery kolejnych wyrazów lub zdań do utworzenia akrostychu
     for i, letter in enumerate(message_with_marker):
-        original_sentence = sentences[i]
+        target_sentence = sentences[i]
+        
+        # Pobieramy do 5 ZMODYFIKOWANYCH już zdań wstecz
+        start_prev = max(0, i - CONTEXT_WINDOW)
+        prev_context = result_text[start_prev:i]
+        
+        # Pobieramy do 5 ORYGINALNYCH zdań w przód
+        end_next = min(len(sentences), i + 1 + CONTEXT_WINDOW)
+        next_context = sentences[i+1:end_next]
         
         # [ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
-        # -> wprowadzać jedynie takie zmiany w tekście, które pozwalają zachować jego 
-        # czytelność i możliwie zbliżony sens.
-        # (Achieved by using LLM to semantically rephrase the sentence without losing its meaning)
-        new_sentence = rephrase_sentence_with_ai(client, original_sentence, letter)
+        # -> wprowadzać jedynie takie zmiany w tekście, które pozwalają zachować jego czytelność i możliwie zbliżony sens.
+        new_sentence = rephrase_sentence_with_context(client, target_sentence, letter, prev_context, next_context)
         
         first_char_match = re.search(r'[A-Za-z]', new_sentence)
         if first_char_match and first_char_match.group(0).upper() != letter:
-            new_sentence = f"{letter} actually, " + new_sentence[0].lower() + new_sentence[1:]
+            # Fallback
+            new_sentence = f"{letter}ożliwe, że " + new_sentence[0].lower() + new_sentence[1:]
             
         result_text.append(new_sentence)
         
     result_text.extend(sentences[len(message_with_marker):])
     
-    # [ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
+    #[ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
     # -> zwracać tekst z ukrytą wiadomością.
     return " ".join(result_text)
 
@@ -108,16 +134,11 @@ def hide_message(source_text: str, secret_message: str) -> str:
 #[ASSIGNMENT REQUIREMENT]: Funkcja wyodrębniająca wiadomość powinna:
 # -> przyjmować tekst z ukrytą wiadomością.
 def extract_message(stego_text: str) -> str:
-    """
-    Extracts the hidden message.
-    Takes 'stego_text' (text with hidden message) as the only parameter.
-    """
     sentences = split_into_sentences(stego_text)
     extracted_message = ""
     
     # [ASSIGNMENT REQUIREMENT]: Funkcja wyodrębniająca wiadomość powinna:
-    # -> odczytywać ukrytą wiadomość z pierwszych liter wyrazów lub zdań, 
-    # zgodnie z przyjętym wariantem akrostychu.
+    # -> odczytywać ukrytą wiadomość z pierwszych liter wyrazów lub zdań
     for sentence in sentences:
         first_char_match = re.search(r'[A-Za-z]', sentence)
         if first_char_match:
@@ -128,7 +149,6 @@ def extract_message(stego_text: str) -> str:
             # -> zwracać odczytaną wiadomość tekstową.
             return extracted_message.replace(STOP_MARKER, "")
             
-    # Fallback return
     return extracted_message
 
 # ==========================================
@@ -136,7 +156,7 @@ def extract_message(stego_text: str) -> str:
 # ==========================================
 if __name__ == "__main__":
     print("=" * 50)
-    print(" AI STEGANOGRAPHY SYSTEM (Powered by Google Gemini) ")
+    print(" AI STEGANOGRAPHY SYSTEM (Context-Aware) ")
     print("=" * 50)
 
     try:
@@ -146,12 +166,10 @@ if __name__ == "__main__":
         if not text or not secret:
             raise FileNotFoundError("Missing 'input.txt' or 'secret.txt'")
 
-        # Execute hiding function
         encrypted_text = hide_message(text, secret)
         write_to_file("output.txt", encrypted_text)
         print("\n[+] SUCCESS: The message has been securely hidden.")
         
-        # Execute extracting function
         text_to_decode = read_from_file("output.txt")
         decoded_secret = extract_message(text_to_decode)
         
