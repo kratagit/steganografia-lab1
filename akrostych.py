@@ -1,76 +1,163 @@
-import random
-
-# Nasz tymczasowy słownik
-SLOWNIK_ZASTEPCZY = {
-    'T':['Tak', 'Teraz', 'Tutaj', 'Tylko', 'Tradycyjnie'],
-    'A':['Ale', 'Akurat', 'Albo', 'Aby', 'Absolutnie'],
-    'J':['Jak', 'Jeszcze', 'Jutro', 'Jasne', 'Jednak'],
-    'N':['Nagle', 'Nigdy', 'Nawet', 'Niestety', 'Nareszcie'],
-    'E': ['Efekt', 'Ekstra', 'Element', 'Ewentualnie', 'Ewidentnie']
-}
-
-def wczytaj_z_pliku(nazwa_pliku):
-    """Odczytuje zawartość pliku tekstowego."""
-    try:
-        with open(nazwa_pliku, 'r', encoding='utf-8') as plik:
-            return plik.read().strip()
-    except FileNotFoundError:
-        print(f"BŁĄD: Nie znaleziono pliku '{nazwa_pliku}'!")
-        return None
-
-def wyodrebnij_wiadomosc(tekst_z_ukryta_wiadomoscia):
-    """Odczytuje pierwsze litery każdego słowa."""
-    slowa = tekst_z_ukryta_wiadomoscia.split()
-    ukryta_wiadomosc = ""
-    for slowo in slowa:
-        ukryta_wiadomosc += slowo[0].upper()
-    return ukryta_wiadomosc
-
-def ukryj_wiadomosc(tekst_zrodlowy, tajna_wiadomosc):
-    """Podmienia pierwsze słowa w tekście, by pasowały do hasła."""
-    slowa_tekstu = tekst_zrodlowy.split()
-    tajna_wiadomosc = tajna_wiadomosc.replace(" ", "").upper()
-    
-    if len(tajna_wiadomosc) > len(slowa_tekstu):
-        return "Błąd: Tekst źródłowy jest za krótki!"
-    
-    wynikowy_tekst = slowa_tekstu.copy()
-    
-    for i in range(len(tajna_wiadomosc)):
-        litera = tajna_wiadomosc[i]
-        if litera in SLOWNIK_ZASTEPCZY:
-            wynikowy_tekst[i] = random.choice(SLOWNIK_ZASTEPCZY[litera])
-        else:
-            wynikowy_tekst[i] = f"[{litera}-BRAK]"
-            
-    return " ".join(wynikowy_tekst)
+import os
+import re
+from dotenv import load_dotenv
+from google import genai
+from google.genai import types
 
 # ==========================================
-# GŁÓWNA CZĘŚĆ PROGRAMU
+# CONFIGURATION & CONSTANTS
+# ==========================================
+load_dotenv()
+STOP_MARKER = "QQQ"
+MODEL_NAME = "gemini-3.1-flash-lite-preview"
+
+# ==========================================
+# HELPER FUNCTIONS
+# ==========================================
+def read_from_file(file_path: str) -> str:
+    with open(file_path, 'r', encoding='utf-8') as file:
+        return file.read().strip()
+
+def write_to_file(file_path: str, content: str) -> None:
+    with open(file_path, 'w', encoding='utf-8') as file:
+        file.write(content)
+
+def split_into_sentences(text: str) -> list[str]:
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    return[sentence for sentence in sentences if len(sentence) > 0]
+
+# ==========================================
+# AI INTEGRATION
+# ==========================================
+def rephrase_sentence_with_ai(client: genai.Client, original_sentence: str, target_letter: str) -> str:
+    prompt = f"""
+    You are a linguistic assistant. Your task is to rephrase the following sentence so that 
+    its first word begins with the letter '{target_letter.upper()}'.
+    
+    RULES:
+    1. You MUST preserve the original meaning and context of the sentence.
+    2. You MUST preserve the original language of the sentence.
+    3. The sentence must sound completely natural and be grammatically correct.
+    4. RETURN ONLY THE REPHRASED SENTENCE. Do not add any quotes.
+    
+    Original sentence: {original_sentence}
+    """
+    config = types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(thinking_level="MINIMAL"),
+        temperature=0.3
+    )
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=prompt,
+        config=config,
+    )
+    return response.text.strip().strip('"').strip("'")
+
+# ==========================================
+# CORE STEGANOGRAPHY SYSTEM
+# ==========================================
+
+#[ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
+# -> przyjmować tekst źródłowy oraz wiadomość do ukrycia
+def hide_message(source_text: str, secret_message: str) -> str:
+    """
+    Hides a secret message within the source text.
+    Takes 'source_text' and 'secret_message' as input parameters.
+    """
+    try:
+        if not os.environ.get("GEMINI_API_KEY"):
+            raise ValueError("API key is missing! Check .env file.")
+        client = genai.Client()
+    except Exception as e:
+        raise RuntimeError(f"Failed to initialize Gemini client: {e}")
+
+    clean_secret = re.sub(r'[^A-Za-z]', '', secret_message).upper()
+    message_with_marker = clean_secret + STOP_MARKER
+    
+    sentences = split_into_sentences(source_text)
+    
+    if len(message_with_marker) > len(sentences):
+        raise ValueError(f"Source text is too short!")
+
+    result_text = []
+    
+    # [ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
+    # -> wykorzystywać pierwsze litery kolejnych wyrazów lub zdań do utworzenia akrostychu
+    for i, letter in enumerate(message_with_marker):
+        original_sentence = sentences[i]
+        
+        # [ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
+        # -> wprowadzać jedynie takie zmiany w tekście, które pozwalają zachować jego 
+        # czytelność i możliwie zbliżony sens.
+        # (Achieved by using LLM to semantically rephrase the sentence without losing its meaning)
+        new_sentence = rephrase_sentence_with_ai(client, original_sentence, letter)
+        
+        first_char_match = re.search(r'[A-Za-z]', new_sentence)
+        if first_char_match and first_char_match.group(0).upper() != letter:
+            new_sentence = f"{letter} actually, " + new_sentence[0].lower() + new_sentence[1:]
+            
+        result_text.append(new_sentence)
+        
+    result_text.extend(sentences[len(message_with_marker):])
+    
+    # [ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
+    # -> zwracać tekst z ukrytą wiadomością.
+    return " ".join(result_text)
+
+
+#[ASSIGNMENT REQUIREMENT]: Funkcja wyodrębniająca wiadomość powinna:
+# -> przyjmować tekst z ukrytą wiadomością.
+def extract_message(stego_text: str) -> str:
+    """
+    Extracts the hidden message.
+    Takes 'stego_text' (text with hidden message) as the only parameter.
+    """
+    sentences = split_into_sentences(stego_text)
+    extracted_message = ""
+    
+    # [ASSIGNMENT REQUIREMENT]: Funkcja wyodrębniająca wiadomość powinna:
+    # -> odczytywać ukrytą wiadomość z pierwszych liter wyrazów lub zdań, 
+    # zgodnie z przyjętym wariantem akrostychu.
+    for sentence in sentences:
+        first_char_match = re.search(r'[A-Za-z]', sentence)
+        if first_char_match:
+            extracted_message += first_char_match.group(0).upper()
+            
+        if STOP_MARKER in extracted_message:
+            #[ASSIGNMENT REQUIREMENT]: Funkcja wyodrębniająca wiadomość powinna:
+            # -> zwracać odczytaną wiadomość tekstową.
+            return extracted_message.replace(STOP_MARKER, "")
+            
+    # Fallback return
+    return extracted_message
+
+# ==========================================
+# MAIN EXECUTION FLOW
 # ==========================================
 if __name__ == "__main__":
-    print("--- START PROGRAMU ---")
+    print("=" * 50)
+    print(" AI STEGANOGRAPHY SYSTEM (Powered by Google Gemini) ")
+    print("=" * 50)
 
-    # 1. Wczytywanie plików
-    zwykly_tekst = wczytaj_z_pliku("input.txt")
-    haslo_do_ukrycia = wczytaj_z_pliku("secret.txt")
-
-    if zwykly_tekst and haslo_do_ukrycia:
-        print(f"\n[+] Wczytano hasło: '{haslo_do_ukrycia}'")
-        print(f"[+] Wczytano tekst źródłowy:\n{zwykly_tekst}\n")
-
-        # 2. Szyfrowanie
-        zaszyfrowany_tekst = ukryj_wiadomosc(zwykly_tekst, haslo_do_ukrycia)
+    try:
+        text = read_from_file("input.txt")
+        secret = read_from_file("secret.txt")
         
-        # Wypisywanie w konsoli
-        print("========================================")
-        print("-> ZASZYFROWANY TEKST (WYNIK):")
-        print(zaszyfrowany_tekst)
-        print("========================================\n")
+        if not text or not secret:
+            raise FileNotFoundError("Missing 'input.txt' or 'secret.txt'")
 
-        # 3. Odczytywanie
-        odkodowane_haslo = wyodrebnij_wiadomosc(zaszyfrowany_tekst)
-        dlugosc_hasla = len(haslo_do_ukrycia.replace(" ", ""))
-        czyste_haslo = odkodowane_haslo[:dlugosc_hasla]
+        # Execute hiding function
+        encrypted_text = hide_message(text, secret)
+        write_to_file("output.txt", encrypted_text)
+        print("\n[+] SUCCESS: The message has been securely hidden.")
         
-        print(f"-> ODKODOWANE HASŁO: {czyste_haslo}")
+        # Execute extracting function
+        text_to_decode = read_from_file("output.txt")
+        decoded_secret = extract_message(text_to_decode)
+        
+        print("\n" + "=" * 50)
+        print(f"-> EXTRACTED SECRET FROM FILE: '{decoded_secret}'")
+        print("=" * 50)
+        
+    except Exception as err:
+        print(f"\n[ERROR]: {err}")
