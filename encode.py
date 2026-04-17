@@ -68,17 +68,25 @@ def rephrase_sentence_with_context(target_sentence: str, target_letter: str, pre
     data = json.dumps({
         "model": MODEL_NAME,
         "prompt": prompt,
-        "stream": False
+        "stream": True
     }).encode("utf-8")
     
     req = urllib.request.Request(OLLAMA_URL, data=data, headers={"Content-Type": "application/json"})
     
     try:
+        print("    [+] Nowe zdanie: ", end="", flush=True)
+        full_response = ""
         with urllib.request.urlopen(req) as response:
-            result = json.loads(response.read().decode("utf-8"))
-            return result.get("response", "").strip().strip('"').strip("'")
+            for line in response:
+                if line:
+                    chunk = json.loads(line.decode("utf-8"))
+                    text_chunk = chunk.get("response", "")
+                    print(text_chunk, end="", flush=True)
+                    full_response += text_chunk
+        print() # Nowa linia po zakończeniu strumienowania
+        return full_response.strip().strip('"').strip("'")
     except Exception as e:
-        print(f"[!] Warning: Error communicating with Ollama: {e}")
+        print(f"\n[!] Warning: Error communicating with Ollama: {e}")
         return target_sentence  # Fallback to original
 
 def fix_sentences_semantics(sentences_chunk: list[str], required_letters: list[str]) -> list[str]:
@@ -107,30 +115,38 @@ def fix_sentences_semantics(sentences_chunk: list[str], required_letters: list[s
     data = json.dumps({
         "model": MODEL_NAME,
         "prompt": prompt,
-        "stream": False
+        "stream": True
     }).encode("utf-8")
     
     req = urllib.request.Request(OLLAMA_URL, data=data, headers={"Content-Type": "application/json"})
     
     try:
+        print("    [AI Editing]: ", end="", flush=True)
+        full_response = ""
         with urllib.request.urlopen(req) as response:
-            result = json.loads(response.read().decode("utf-8"))
-            corrected_text = result.get("response", "").strip().strip('"').strip("'")
-            corrected_sentences = split_into_sentences(corrected_text)
+            for line in response:
+                if line:
+                    chunk = json.loads(line.decode("utf-8"))
+                    text_chunk = chunk.get("response", "")
+                    print(text_chunk, end="", flush=True)
+                    full_response += text_chunk
+        print() # Nowa linia po zakończeniu
+        corrected_text = full_response.strip().strip('"').strip("'")
+        corrected_sentences = split_into_sentences(corrected_text)
             
-            # Additional fallback check: verify if the model successfully preserved letters and sentence count
-            if len(corrected_sentences) == len(sentences_chunk):
-                match_all = True
-                for j in range(len(sentences_chunk)):
-                    first_char_match = re.search(r'[A-Za-z]', corrected_sentences[j])
-                    if not first_char_match or first_char_match.group(0).upper() != required_letters[j].upper():
-                        match_all = False
-                        break
-                if match_all:
-                    return corrected_sentences
-            return sentences_chunk # Fallback if model failed constraints
+        # Additional fallback check: verify if the model successfully preserved letters and sentence count
+        if len(corrected_sentences) == len(sentences_chunk):
+            match_all = True
+            for j in range(len(sentences_chunk)):
+                first_char_match = re.search(r'[A-Za-z]', corrected_sentences[j])
+                if not first_char_match or first_char_match.group(0).upper() != required_letters[j].upper():
+                    match_all = False
+                    break
+            if match_all:
+                return corrected_sentences
+        return sentences_chunk # Fallback if model failed constraints
     except Exception as e:
-        print(f"[!] Warning: Error communicating with Ollama during fix: {e}")
+        print(f"\n[!] Warning: Error communicating with Ollama during fix: {e}")
         return sentences_chunk
 
 # ==========================================
@@ -180,13 +196,15 @@ def hide_message(source_text: str, secret_message: str) -> str:
         next_context = sentences[i+1:end_next]
         
         print(f"[>] Wysyłam request do AI: litera {i + 1}/{len(tasks)} ('{letter}')...")
+        print(f"    [-] Oryginał: {target_sentence}")
         new_sentence = rephrase_sentence_with_context(target_sentence, letter, prev_context, next_context)
         
         first_char_match = re.search(r'[A-Za-z]', new_sentence)
         if first_char_match and first_char_match.group(0).upper() != letter:
             new_sentence = f"{letter}ożliwe, że " + new_sentence[0].lower() + new_sentence[1:]
+            print(f"    [!] Wymuszono literę: {new_sentence}")
             
-        print(f"[V] Otrzymano wynik: litera '{letter}'.")
+        print(f"[V] Otrzymano wynik: litera '{letter}'")
         return i, new_sentence
 
     result_text =[]
@@ -200,7 +218,9 @@ def hide_message(source_text: str, secret_message: str) -> str:
     print(f"[*] Post-processing: Sprawdzanie paczek zdań...")
     fixed_results =[]
     chunk_size = 3
-    for k in range(0, len(result_text), chunk_size):
+    num_chunks = (len(result_text) + chunk_size - 1) // chunk_size
+    for step, k in enumerate(range(0, len(result_text), chunk_size)):
+        print(f"[>] Przetwarzanie paczki {step + 1}/{num_chunks}...")
         chunk = result_text[k:k+chunk_size]
         letters_chunk = [t['letter'] for t in tasks[k:k+chunk_size]]
         
