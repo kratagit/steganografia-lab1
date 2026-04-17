@@ -27,16 +27,18 @@ def extract_message(stego_text: str) -> str:
     sentences = split_into_sentences(stego_text)
     extracted_message = ""
     
-    # [ASSIGNMENT REQUIREMENT]: Funkcja wyodrębniająca wiadomość powinna:
-    # -> odczytywać ukrytą wiadomość z pierwszych liter wyrazów lub zdań
     for sentence in sentences:
+        # 1. Sprawdzamy czy przed literą ukryto niewidoczne spacje
+        space_count = sentence.count('\u200B')
+        extracted_message += ' ' * space_count
+        
+        # 2. Szukamy pierwszej litery
         first_char_match = re.search(r'[A-Za-z]', sentence)
         if first_char_match:
             extracted_message += first_char_match.group(0).upper()
             
+        # 3. Zatrzymujemy, jeśli znaleziono marker
         if STOP_MARKER in extracted_message:
-            #[ASSIGNMENT REQUIREMENT]: Funkcja wyodrębniająca wiadomość powinna:
-            # -> zwracać odczytaną wiadomość tekstową.
             return extracted_message.replace(STOP_MARKER, "")
             
     return extracted_message

@@ -1,6 +1,5 @@
 import os
 import re
-import concurrent.futures
 import json
 import urllib.request
 import unicodedata
@@ -8,7 +7,8 @@ import unicodedata
 # CONFIGURATION & CONSTANTS
 # ==========================================
 
-STOP_MARKER = "MMM" 
+STOP_MARKER = "MMM"
+ZWSP = '\u200B'  # Zero-Width Space (niewidoczna spacja)
 MODEL_NAME = "gemma4:e4b-it-q8_0"
 OLLAMA_URL = "http://localhost:11434/api/generate"
 CONTEXT_WINDOW = 3  # Number of sentences before and after
@@ -140,85 +140,84 @@ def fix_sentences_semantics(sentences_chunk: list[str], required_letters: list[s
 #[ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
 # -> przyjmować tekst źródłowy oraz wiadomość do ukrycia
 def hide_message(source_text: str, secret_message: str) -> str:
-    # We no longer check for GEMINI_API_KEY since we are using local Ollama.
+    # 1. Normalizacja i usunięcie polskich znaków (zostawiamy spacje!)
+    pl_chars = "ąćęłńóśźżĄĆĘŁŃÓŚŹŻ"
+    ascii_replacements = "acelnoszzACELNOSZZ"
+    translator = str.maketrans(pl_chars, ascii_replacements)
+    secret_translated = secret_message.translate(translator)
 
-    # 1. Usuwamy polskie/europejskie znaki diakrytyczne (np. Ś -> S, Ó -> O)
-    secret_normalized = unicodedata.normalize('NFKD', secret_message).encode('ASCII', 'ignore').decode('utf-8')
+    secret_normalized = unicodedata.normalize('NFKD', secret_translated).encode('ASCII', 'ignore').decode('utf-8')
+    clean_secret = re.sub(r'[^A-Za-z ]', '', secret_normalized).upper().strip()
     
-    # 2. Dopiero teraz usuwamy spacje, cyfry i znaki specjalne, zostawiając czyste A-Z
-    clean_secret = re.sub(r'[^A-Za-z]', '', secret_normalized).upper()
-    message_with_marker = clean_secret + STOP_MARKER
-    
+    # 2. Tworzymy listę "Zadań" (oddzielamy litery od spacji)
+    tasks =[]
+    pending_spaces = 0
+    for char in clean_secret:
+        if char == ' ':
+            pending_spaces += 1
+        else:
+            tasks.append({'letter': char, 'spaces_before': pending_spaces})
+            pending_spaces = 0
+            
+    # 3. Dodajemy znacznik STOP do zadań (same litery)
+    for char in STOP_MARKER:
+        tasks.append({'letter': char, 'spaces_before': pending_spaces})
+        pending_spaces = 0
+
     sentences = split_into_sentences(source_text)
     
-    if len(message_with_marker) > len(sentences):
-        raise ValueError(f"Source text is too short! Need at least {len(message_with_marker)} sentences, but got {len(sentences)}.")
+    # Zauważ: sprawdzamy długość 'tasks', a nie całego hasła ze spacjami!
+    if len(tasks) > len(sentences):
+        raise ValueError(f"Tekst jest za krótki! Wymagane zdań: {len(tasks)}, dostępne: {len(sentences)}.")
 
-    result_text = []
-    
-    print(f"[*] Starting AI steganography with CONTEXT AWARENESS ({len(message_with_marker)} characters)...")
+    print(f"[*] Rozpoczynam AI Steganography ({len(tasks)} liter do ukrycia)...")
     
     def process_sentence(i, letter):
         target_sentence = sentences[i]
-        
-        # Używamy ORYGINALNYCH zdań zarówno w tył jak i w przód, co pozwala nam puścić to "bulkiem":
         start_prev = max(0, i - CONTEXT_WINDOW)
         prev_context = sentences[start_prev:i]
-        
         end_next = min(len(sentences), i + 1 + CONTEXT_WINDOW)
         next_context = sentences[i+1:end_next]
         
-        print(f"[>] Wysyłam request do AI: litera {i + 1}/{len(message_with_marker)} ('{letter}')...")
+        print(f"[>] Wysyłam request do AI: litera {i + 1}/{len(tasks)} ('{letter}')...")
         new_sentence = rephrase_sentence_with_context(target_sentence, letter, prev_context, next_context)
         
         first_char_match = re.search(r'[A-Za-z]', new_sentence)
         if first_char_match and first_char_match.group(0).upper() != letter:
-            # Fallback
             new_sentence = f"{letter}ożliwe, że " + new_sentence[0].lower() + new_sentence[1:]
             
-        print(f"[V] Otrzymano wynik: litera {i + 1}/{len(message_with_marker)} ('{letter}').")
-        print(f"    Oryginał: {target_sentence}")
-        print(f"    Nowe:     {new_sentence}")
+        print(f"[V] Otrzymano wynik: litera '{letter}'.")
         return i, new_sentence
 
-    result_text = []
+    result_text =[]
 
-    # [ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
-    # -> wykorzystywać pierwsze litery kolejnych wyrazów lub zdań do utworzenia akrostychu
-    # -> wprowadzać jedynie takie zmiany w tekście, które pozwalają zachować jego czytelność i możliwie zbliżony sens.
-    
-    # Procesujemy zdania sekwencyjnie (pojedynczo) w przypadku API od Ollamy
-    for i, letter in enumerate(message_with_marker):
+    # Generowanie zdań przez LLM (tylko dla liter!)
+    for i, task in enumerate(tasks):
+        letter = task['letter']
         idx, mod_sentence = process_sentence(i, letter)
         result_text.append(mod_sentence)
         
-    print(f"[*] Post-processing: Checking sentences in chunks of 3 for logical/semantic flow...")
-    # Fix semantics in chunks of 3 sentences
-    fixed_results = []
+    print(f"[*] Post-processing: Sprawdzanie paczek zdań...")
+    fixed_results =[]
     chunk_size = 3
     for k in range(0, len(result_text), chunk_size):
         chunk = result_text[k:k+chunk_size]
-        letters_chunk = list(message_with_marker[k:k+chunk_size])
+        letters_chunk = [t['letter'] for t in tasks[k:k+chunk_size]]
         
-        print(f"[>] Fixing semantics for sentences {k+1} to min({k+chunk_size}, {len(result_text)})...")
         corrected_chunk = fix_sentences_semantics(chunk, letters_chunk)
-        
-        if corrected_chunk != chunk:
-            print(f"    Semantyka poprawiona:")
-            for orig, corr in zip(chunk, corrected_chunk):
-                if orig != corr:
-                    print(f"      Było: {orig}")
-                    print(f"      Jest: {corr}")
-        
         fixed_results.extend(corrected_chunk)
     
-    # Replace result_text with fixed results
     result_text = fixed_results
 
-    result_text.extend(sentences[len(message_with_marker):])
+    # 4. KLUCZOWY MOMENT: WSTRZYKIWANIE NIEWIDOCZNYCH SPACJI
+    # Robimy to po tym, jak AI skończyło działać, żeby AI ich nie usunęło!
+    for i, task in enumerate(tasks):
+        if task['spaces_before'] > 0:
+            result_text[i] = (ZWSP * task['spaces_before']) + result_text[i]
+
+    # Doklejamy resztę niemodyfikowanych zdań
+    result_text.extend(sentences[len(tasks):])
     
-    #[ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
-    # -> zwracać tekst z ukrytą wiadomością.
     return " ".join(result_text)
 
 # ==========================================
