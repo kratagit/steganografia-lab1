@@ -21,23 +21,24 @@ def split_into_sentences(text: str) -> list[str]:
 # CORE STEGANOGRAPHY SYSTEM
 # ==========================================
 
-#[ASSIGNMENT REQUIREMENT]: Funkcja wyodrębniająca wiadomość powinna:
-# -> przyjmować tekst z ukrytą wiadomością.
 def extract_message(stego_text: str) -> str:
+    """
+    Extracts a hidden steganographic message from the provided text.
+    """
     sentences = split_into_sentences(stego_text)
     extracted_message = ""
     
     for sentence in sentences:
-        # 1. Sprawdzamy czy przed literą ukryto niewidoczne spacje
+        # 1. Check for hidden zero-width spaces
         space_count = sentence.count('\u200B')
         extracted_message += ' ' * space_count
         
-        # 2. Szukamy pierwszej litery
+        # 2. Extract the first valid letter
         first_char_match = re.search(r'[A-Za-z]', sentence)
         if first_char_match:
             extracted_message += first_char_match.group(0).upper()
             
-        # 3. Zatrzymujemy, jeśli znaleziono marker
+        # 3. Stop processing if the end marker is found
         if STOP_MARKER in extracted_message:
             return extracted_message.replace(STOP_MARKER, "")
             

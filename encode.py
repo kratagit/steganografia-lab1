@@ -8,12 +8,12 @@ import unicodedata
 # ==========================================
 
 STOP_MARKER = "MMM"
-ZWSP = '\u200B'  # Zero-Width Space (niewidoczna spacja)
+ZWSP = '\u200B'  # Zero-Width Space
 MODEL_NAME = "gemma4:e4b-it-q8_0"
 OLLAMA_URL = "http://localhost:11434/api/generate"
 CONTEXT_WINDOW = 3  # Number of sentences before and after
-INPUT_FILE = "input1.txt"
-SECRET_FILE = "secret1.txt"
+INPUT_FILE = "input4.txt"
+SECRET_FILE = "secret4.txt"
 OUTPUT_FILE = "output.txt"
 
 # ==========================================
@@ -32,7 +32,7 @@ def split_into_sentences(text: str) -> list[str]:
     return [sentence for sentence in sentences if len(sentence) > 0]
 
 # ==========================================
-# AI INTEGRATION (NOW WITH CONTEXT)
+# AI INTEGRATION (WITH CONTEXT)
 # ==========================================
 def rephrase_sentence_with_context(target_sentence: str, target_letter: str, prev_context: list[str], next_context: list[str]) -> str:
     """
@@ -74,7 +74,7 @@ def rephrase_sentence_with_context(target_sentence: str, target_letter: str, pre
     req = urllib.request.Request(OLLAMA_URL, data=data, headers={"Content-Type": "application/json"})
     
     try:
-        print("    [+] Nowe zdanie: ", end="", flush=True)
+        print("    [+] New sentence: ", end="", flush=True)
         full_response = ""
         with urllib.request.urlopen(req) as response:
             for line in response:
@@ -83,7 +83,7 @@ def rephrase_sentence_with_context(target_sentence: str, target_letter: str, pre
                     text_chunk = chunk.get("response", "")
                     print(text_chunk, end="", flush=True)
                     full_response += text_chunk
-        print() # Nowa linia po zakończeniu strumienowania
+        print() # Newline after streaming finishes
         return full_response.strip().strip('"').strip("'")
     except Exception as e:
         print(f"\n[!] Warning: Error communicating with Ollama: {e}")
@@ -98,7 +98,7 @@ def fix_sentences_semantics(sentences_chunk: list[str], required_letters: list[s
     letters_str = ", ".join([f"sentence {i+1} must start with '{letter.upper()}'" for i, letter in enumerate(required_letters)])
     
     prompt = f"""
-    You are an expert Polish editor. The following text may sound unnatural, have logical errors, or contain strange phrases. 
+    You are an expert editor. The following text may sound unnatural, have logical errors, or contain strange phrases. 
     Your task is to fix it to sound 100% natural, correct and logical. 
     
     CRITICAL STEGANOGRAPHY RULE:
@@ -130,7 +130,7 @@ def fix_sentences_semantics(sentences_chunk: list[str], required_letters: list[s
                     text_chunk = chunk.get("response", "")
                     print(text_chunk, end="", flush=True)
                     full_response += text_chunk
-        print() # Nowa linia po zakończeniu
+        print() # Newline after streaming finishes
         corrected_text = full_response.strip().strip('"').strip("'")
         corrected_sentences = split_into_sentences(corrected_text)
             
@@ -153,10 +153,11 @@ def fix_sentences_semantics(sentences_chunk: list[str], required_letters: list[s
 # CORE STEGANOGRAPHY SYSTEM
 # ==========================================
 
-#[ASSIGNMENT REQUIREMENT]: Funkcja ukrywająca wiadomość powinna:
-# -> przyjmować tekst źródłowy oraz wiadomość do ukrycia
 def hide_message(source_text: str, secret_message: str) -> str:
-    # 1. Normalizacja i usunięcie polskich znaków (zostawiamy spacje!)
+    """
+    Hides a secret message within the source text using an AI model to rephrase sentences.
+    """
+    # 1. Normalize and remove Polish characters (spaces are preserved)
     pl_chars = "ąćęłńóśźżĄĆĘŁŃÓŚŹŻ"
     ascii_replacements = "acelnoszzACELNOSZZ"
     translator = str.maketrans(pl_chars, ascii_replacements)
@@ -165,8 +166,8 @@ def hide_message(source_text: str, secret_message: str) -> str:
     secret_normalized = unicodedata.normalize('NFKD', secret_translated).encode('ASCII', 'ignore').decode('utf-8')
     clean_secret = re.sub(r'[^A-Za-z ]', '', secret_normalized).upper().strip()
     
-    # 2. Tworzymy listę "Zadań" (oddzielamy litery od spacji)
-    tasks =[]
+    # 2. Create a list of tasks (separating letters from spaces)
+    tasks = []
     pending_spaces = 0
     for char in clean_secret:
         if char == ' ':
@@ -175,18 +176,18 @@ def hide_message(source_text: str, secret_message: str) -> str:
             tasks.append({'letter': char, 'spaces_before': pending_spaces})
             pending_spaces = 0
             
-    # 3. Dodajemy znacznik STOP do zadań (same litery)
+    # 3. Add the STOP marker to the tasks (letters only)
     for char in STOP_MARKER:
         tasks.append({'letter': char, 'spaces_before': pending_spaces})
         pending_spaces = 0
 
     sentences = split_into_sentences(source_text)
     
-    # Zauważ: sprawdzamy długość 'tasks', a nie całego hasła ze spacjami!
+    # Note: Check the length against 'tasks', not the entire string with spaces!
     if len(tasks) > len(sentences):
-        raise ValueError(f"Tekst jest za krótki! Wymagane zdań: {len(tasks)}, dostępne: {len(sentences)}.")
+        raise ValueError(f"Text is too short! Required sentences: {len(tasks)}, available: {len(sentences)}.")
 
-    print(f"[*] Rozpoczynam AI Steganography ({len(tasks)} liter do ukrycia)...")
+    print(f"[*] Starting AI Steganography ({len(tasks)} letters to hide)...")
     
     def process_sentence(i, letter):
         target_sentence = sentences[i]
@@ -195,32 +196,32 @@ def hide_message(source_text: str, secret_message: str) -> str:
         end_next = min(len(sentences), i + 1 + CONTEXT_WINDOW)
         next_context = sentences[i+1:end_next]
         
-        print(f"[>] Wysyłam request do AI: litera {i + 1}/{len(tasks)} ('{letter}')...")
-        print(f"    [-] Oryginał: {target_sentence}")
+        print(f"[>] Sending request to AI: letter {i + 1}/{len(tasks)} ('{letter}')...")
+        print(f"    [-] Original: {target_sentence}")
         new_sentence = rephrase_sentence_with_context(target_sentence, letter, prev_context, next_context)
         
         first_char_match = re.search(r'[A-Za-z]', new_sentence)
         if first_char_match and first_char_match.group(0).upper() != letter:
-            new_sentence = f"{letter}ożliwe, że " + new_sentence[0].lower() + new_sentence[1:]
-            print(f"    [!] Wymuszono literę: {new_sentence}")
+            new_sentence = f"{letter}ossibly, " + new_sentence[0].lower() + new_sentence[1:]
+            print(f"    [!] Forced starting letter: {new_sentence}")
             
-        print(f"[V] Otrzymano wynik: litera '{letter}'")
+        print(f"[V] Received result: letter '{letter}'")
         return i, new_sentence
 
-    result_text =[]
+    result_text = []
 
-    # Generowanie zdań przez LLM (tylko dla liter!)
+    # AI sentence generation (letters only)
     for i, task in enumerate(tasks):
         letter = task['letter']
         idx, mod_sentence = process_sentence(i, letter)
         result_text.append(mod_sentence)
         
-    print(f"[*] Post-processing: Sprawdzanie paczek zdań...")
-    fixed_results =[]
+    print(f"[*] Post-processing: Checking sentence chunks...")
+    fixed_results = []
     chunk_size = 3
     num_chunks = (len(result_text) + chunk_size - 1) // chunk_size
     for step, k in enumerate(range(0, len(result_text), chunk_size)):
-        print(f"[>] Przetwarzanie paczki {step + 1}/{num_chunks}...")
+        print(f"[>] Processing chunk {step + 1}/{num_chunks}...")
         chunk = result_text[k:k+chunk_size]
         letters_chunk = [t['letter'] for t in tasks[k:k+chunk_size]]
         
@@ -229,13 +230,13 @@ def hide_message(source_text: str, secret_message: str) -> str:
     
     result_text = fixed_results
 
-    # 4. KLUCZOWY MOMENT: WSTRZYKIWANIE NIEWIDOCZNYCH SPACJI
-    # Robimy to po tym, jak AI skończyło działać, żeby AI ich nie usunęło!
+    # 4. CRITICAL: INJECTING ZERO-WIDTH SPACES
+    # This must be done after the AI processing finishes so they aren't removed!
     for i, task in enumerate(tasks):
         if task['spaces_before'] > 0:
             result_text[i] = (ZWSP * task['spaces_before']) + result_text[i]
 
-    # Doklejamy resztę niemodyfikowanych zdań
+    # Append any remaining unmodified sentences
     result_text.extend(sentences[len(tasks):])
     
     return " ".join(result_text)
