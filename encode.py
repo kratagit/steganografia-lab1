@@ -3,6 +3,7 @@ import re
 import concurrent.futures
 import json
 import urllib.request
+import unicodedata
 # ==========================================
 # CONFIGURATION & CONSTANTS
 # ==========================================
@@ -10,9 +11,9 @@ import urllib.request
 STOP_MARKER = "MMM" 
 MODEL_NAME = "gemma4:e4b-it-q8_0"
 OLLAMA_URL = "http://localhost:11434/api/generate"
-CONTEXT_WINDOW = 5  # Number of sentences before and after
-INPUT_FILE = "input2.txt"
-SECRET_FILE = "secret2.txt"
+CONTEXT_WINDOW = 3  # Number of sentences before and after
+INPUT_FILE = "input1.txt"
+SECRET_FILE = "secret1.txt"
 OUTPUT_FILE = "output.txt"
 
 # ==========================================
@@ -141,7 +142,11 @@ def fix_sentences_semantics(sentences_chunk: list[str], required_letters: list[s
 def hide_message(source_text: str, secret_message: str) -> str:
     # We no longer check for GEMINI_API_KEY since we are using local Ollama.
 
-    clean_secret = re.sub(r'[^A-Za-z]', '', secret_message).upper()
+    # 1. Usuwamy polskie/europejskie znaki diakrytyczne (np. Ś -> S, Ó -> O)
+    secret_normalized = unicodedata.normalize('NFKD', secret_message).encode('ASCII', 'ignore').decode('utf-8')
+    
+    # 2. Dopiero teraz usuwamy spacje, cyfry i znaki specjalne, zostawiając czyste A-Z
+    clean_secret = re.sub(r'[^A-Za-z]', '', secret_normalized).upper()
     message_with_marker = clean_secret + STOP_MARKER
     
     sentences = split_into_sentences(source_text)
@@ -172,6 +177,8 @@ def hide_message(source_text: str, secret_message: str) -> str:
             new_sentence = f"{letter}ożliwe, że " + new_sentence[0].lower() + new_sentence[1:]
             
         print(f"[V] Otrzymano wynik: litera {i + 1}/{len(message_with_marker)} ('{letter}').")
+        print(f"    Oryginał: {target_sentence}")
+        print(f"    Nowe:     {new_sentence}")
         return i, new_sentence
 
     result_text = []
@@ -195,6 +202,14 @@ def hide_message(source_text: str, secret_message: str) -> str:
         
         print(f"[>] Fixing semantics for sentences {k+1} to min({k+chunk_size}, {len(result_text)})...")
         corrected_chunk = fix_sentences_semantics(chunk, letters_chunk)
+        
+        if corrected_chunk != chunk:
+            print(f"    Semantyka poprawiona:")
+            for orig, corr in zip(chunk, corrected_chunk):
+                if orig != corr:
+                    print(f"      Było: {orig}")
+                    print(f"      Jest: {corr}")
+        
         fixed_results.extend(corrected_chunk)
     
     # Replace result_text with fixed results
