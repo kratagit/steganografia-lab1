@@ -1,8 +1,6 @@
-# steganografia-lab1
+# steg-lab1-akrostych
 
 # Laboratorium 1
-
-## Instructions
 
 ### Cel zadania
 Celem zadania jest implementacja prostego systemu **steganografii lingwistycznej** z wykorzystaniem techniki **akrostychu** w środowisku Python.
